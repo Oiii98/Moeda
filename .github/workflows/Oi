@@ -1,0 +1,110 @@
+import hashlib
+import time
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat, load_pem_private_key
+
+class Block:
+    def __init__(self, index, timestamp, data, previous_hash):
+        self.index = index
+        self.timestamp = timestamp
+        self.data = data
+        self.previous_hash = previous_hash
+        self.hash = self.calculate_hash()
+
+    def calculate_hash(self):
+        data = str(self.index) + str(self.timestamp) + str(self.data) + str(self.previous_hash)
+        return hashlib.sha256(data.encode()).hexdigest()
+
+class Transaction:
+    def __init__(self, sender, receiver, amount, contract=None, signature=None):
+        self.sender = sender
+        self.receiver = receiver
+        self.amount = amount
+        self.contract = contract
+        self.signature = signature
+
+    def sign_transaction(self, private_key):
+        signer = private_key.signer(padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH))
+        transaction_hash = hashlib.sha256(str(self).encode()).digest()
+        signer.update(transaction_hash)
+        self.signature = signer.finalize()
+
+    def verify_signature(self, public_key):
+        verifier = public_key.verifier(signature=self.signature, padding=padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH))
+        transaction_hash = hashlib.sha256(str(self).encode()).digest()
+        verifier.update(transaction_hash)
+        return verifier.verify()
+
+    def __str__(self):
+        return f"Sender: {self.sender} Receiver: {self.receiver} Amount: {self.amount} Contract: {self.contract} Signature: {self.signature}"
+
+class Blockchain:
+    def __init__(self):
+        self.chain = [self.create_genesis_block()]
+
+    def create_genesis_block(self):
+        return Block(0, time.time(), [], "0")
+
+    def add_block(self, new_block):
+        new_block.previous_hash = self.chain[-1].hash
+        new_block.hash = new_block.calculate_hash()
+        self.chain.append(new_block)
+
+    def is_chain_valid(self):
+        for i in range(1, len(self.chain)):
+            current_block = self.chain[i]
+            previous_block = self.chain[i - 1]
+            if current_block.hash != current_block.calculate_hash():
+                return False
+            if current_block.previous_hash != previous_block.hash:
+                return False
+        return True
+
+class Token:
+    def __init__(self, token_name, decimal_places):
+        self.token_name = token_name
+        self.decimal_places = decimal_places
+        self.token_supply = 0
+        self.blockchain = Blockchain()
+
+    def create_token(self, sender, receiver, amount):
+        transaction = Transaction(sender, receiver, amount)
+        self.blockchain.add_block(Block(len(self.blockchain.chain), time.time(), [transaction], self.blockchain.chain[-1].hash))
+        self.token_supply += amount
+
+    def transfer_token(self, sender, receiver, amount, private_key=None):
+        transaction = Transaction(sender, receiver, amount)
+        if private_key:
+            transaction.sign_transaction(private_key)
+        self.blockchain.add_block(Block(len(self.blockchain.chain), time.time(), [transaction], self.blockchain.chain[-1].hash))
+
+    def get_balance(self, address):
+        balance = 0
+        for block in self.blockchain.chain:
+            for transaction in block.data:
+                if transaction.receiver == address:
+                    balance += transaction.amount
+                if transaction.sender == address:
+                    balance -= transaction.amount
+        return balance
+
+# Criação da chave privada e pública para assinatura digital
+private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+public_key = private_key.public_key()
+
+# Instanciando uma nova criptomoeda
+my_token = Token("MyToken", 2)
+
+# Criando alguns tokens
+my_token.create_token("Genesis Block", "Alice", 100)
+my_token.create_token("Genesis Block", "Bob", 50)
+
+# Transferindo tokens usando assinatura digital
+my_token.transfer_token("Alice", "Bob", 10, private_key)
+
+# Verificando a integridade da cadeia e o saldo das contas
+print("A cadeia é válida?", my_token.blockchain.is_chain_valid())
+print("Saldo de Alice:", my_token.get_balance("Alice"))
+print("Saldo de Bob:", my_token.get_balance("Bob"))
+print("Chave Pública:", public_key.public_bytes(Encoding.PEM, PublicFormat.PKCS1))
